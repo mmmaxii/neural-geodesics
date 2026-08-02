@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neural-geodesics"
+version = "0.1.0"
+description = "Neural network approximation of geodesic integration in Schwarzschild spacetime for real-time black hole ray tracing"
+authors = [
+    {name = "Maximiliano Valderrama"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "torch>=2.0",
+    "torchdiffeq",
+    "tqdm",
+    "h5py"
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff", "isort"]
+export = ["onnx", "onnxruntime", "onnxruntime-gpu"]
+notebook = ["jupyter", "ipywidgets"]
+web = ["fastapi", "uvicorn"]
+
+[project.scripts]
+# Example of entry point for scripts inside the scripts/ directory
+# generate_data = "scripts.generate_data:main"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
