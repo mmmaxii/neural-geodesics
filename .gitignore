@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.pyc
+.eggs/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Data
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+*.npz
+*.h5
+*.hdf5
+
+# Models
+models/checkpoints/*
+!models/checkpoints/.gitkeep
+models/onnx/*
+!models/onnx/.gitkeep
+*.pt
+*.pth
+*.onnx
+
+# Results
+results/*
+!results/.gitkeep
+!results/figures/.gitkeep
+!results/benchmarks/.gitkeep
+
+# Node
+node_modules/
+web/node_modules/
+web/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Env
+.env
+.env.local
