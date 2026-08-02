@@ -4,27 +4,27 @@
 
 ```mermaid
 graph LR
-    subgraph FASE1["🔭 Fase 1: Física"]
+    subgraph FASE1["Fase 1: Física"]
         A["Métrica de<br/>Schwarzschild"] --> B["Ecuación de Binet<br/>d²u/dφ² + u = 3Mu²"]
         B --> C["Integrador RK45"]
         C --> D["Dataset<br/>100K geodésicas"]
     end
 
-    subgraph FASE2["🧠 Fase 2: Entrenamiento"]
+    subgraph FASE2["Fase 2: Entrenamiento"]
         D --> E["GeodesicDataset<br/>normalización + sampling"]
         E --> F["PIMLP"]
         G["Physics Loss<br/>ODE residual"] --> F
         F --> H["Modelo Entrenado<br/>.pt"]
     end
 
-    subgraph FASE3["🎨 Fase 3: Comparación"]
+    subgraph FASE3["Fase 3: Comparación"]
         H --> I["Neural Renderer"]
         C --> J["Classical Renderer"]
         I --> K["Comparación<br/>lado a lado"]
         J --> K
     end
 
-    subgraph FASE4["🌐 Fase 4: Web"]
+    subgraph FASE4["Fase 4: Web"]
         H --> L["Export ONNX<br/>+ INT8"]
         L --> M["Browser<br/>WebGPU"]
     end
@@ -48,7 +48,7 @@ graph TD
     subgraph SAMPLING["Estrategia de Muestreo"]
         S1["Uniforme<br/>40K puntos"]
         S2["Log-espaciado<br/>30K puntos"]
-        S3["Concentrado en b_crit<br/>30K puntos<br/>⚠️ zona crítica"]
+        S3["Concentrado en b_crit<br/>30K puntos<br/>Zona crítica"]
     end
 
     subgraph ODE["Integración de la ODE"]
@@ -58,9 +58,9 @@ graph TD
     end
 
     subgraph EVENTS_DETAIL["Eventos"]
-        EV1["🔴 Captura<br/>u > 1/rₛ"]
-        EV2["🟢 Escape<br/>r > r_max"]
-        EV3["🟡 Disco<br/>intersección"]
+        EV1["Captura<br/>u > 1/rₛ"]
+        EV2["Escape<br/>r > r_max"]
+        EV3["Disco<br/>intersección"]
     end
 
     subgraph OUTPUT["Dataset de Salida (.npz)"]
@@ -117,7 +117,7 @@ graph LR
     style H4 fill:#2c3e50,stroke:#8e44ad,color:#fff
 ```
 
-**Total de parámetros**: ~35K (modelo muy ligero → rápido en browser)
+**Total de parámetros**: ~35K (modelo muy ligero -> rápido en browser)
 
 ---
 
@@ -164,7 +164,7 @@ graph TD
     IMPACT --> CLASSICAL_PATH
     IMPACT --> NEURAL_PATH
 
-    subgraph CLASSICAL_PATH["⏱️ Método Clásico (~ms por pixel)"]
+    subgraph CLASSICAL_PATH["Método Clásico (~ms por pixel)"]
         C1["Integrar ODE<br/>~100-1000 pasos RK45"]
         C2["¿Capturado?"]
         C3["Calcular Δφ"]
@@ -172,7 +172,7 @@ graph TD
         C1 --> C2 --> C3 --> C4
     end
 
-    subgraph NEURAL_PATH["⚡ Método Neural (~μs por pixel)"]
+    subgraph NEURAL_PATH["Método Neural (~μs por pixel)"]
         N1["Forward pass<br/>PIMLP(b/rₛ)"]
         N2["Δφ, P(captura)"]
         N3["Buscar color<br/>en fondo/disco"]
@@ -215,9 +215,9 @@ graph TD
     end
 
     subgraph DISPLAY["Pantalla"]
-        VIEW1["🖼️ Render Neural<br/>~60 FPS"]
-        VIEW2["🖼️ Render Clásico<br/>~5 FPS"]
-        METRICS["📊 Métricas<br/>Error, FPS, Speedup"]
+        VIEW1["Render Neural<br/>~60 FPS"]
+        VIEW2["Render Clásico<br/>~5 FPS"]
+        METRICS["Métricas<br/>Error, FPS, Speedup"]
         VIEW1 & VIEW2 --> METRICS
     end
 
