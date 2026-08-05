@@ -160,8 +160,54 @@ Ojo con dos cosas al usarlo:
 
 Cuando conviene cada uno: panorama para planos generales (barato y muestra el
 alabeo de estructura extendida), puntos para primeros planos (nitidos a
-cualquier zoom). Los puntos no muestran arcos, pero si imagenes multiples y
-magnificacion, que con densidad suficiente dibujan el anillo de fotones.
+cualquier zoom). Ademas los puntos evitan la distorsion de proyectar una esfera
+en un plano, que es lo que ensucia el panorama cerca de los polos.
+
+### El radio de Einstein: por que el lensing de las estrellas no se veia
+
+Durante un tiempo parecio que las estrellas no se lenseaban. No era asi: el
+problema era el ENCUADRE.
+
+Con la fuente en el infinito y la camara a r_obs, hay anillo de Einstein cuando
+la deflexion iguala al angulo con que sale el rayo:
+
+    4M/b = b/r_obs      ->      b_E = sqrt(4 M r_obs)
+
+Con r_obs = 1000 M eso da 63.2 M. Comprobado poniendo UNA estrella sintetica
+justo detras del agujero: sale un anillo limpio de radio medido **64.7 M**, un
+2.4% por encima (campo debil subestima la deflexion).
+
+Y ahi esta el problema:
+
+| | radio |
+|---|---|
+| sombra | 5.20 M |
+| **encuadre que se venia usando** | **26 M** |
+| anillo de Einstein | 64.7 M |
+
+O sea que 26 M cae en TIERRA DE NADIE: pasado el anillo de fotones y muy corto
+del de Einstein. Todo el lensing visible quedaba fuera del cuadro.
+
+Con `--half-width 80` aparecen los arcos concentricos de estrellas estiradas
+tangencialmente, que es la firma del lensing fuerte.
+
+Notar que b_E crece con sqrt(r_obs), asi que acercar la camara encoge el anillo
+de Einstein y lo acerca a la sombra. Para que ambos entren comodos en el mismo
+cuadro hay que elegir r_obs a conciencia, no dejarlo en 1000 M por inercia.
+
+### Que parche del cielo queda detras
+
+`--behind-galactic-center` gira el cielo para que Sgr A* (RA 266.417,
+DEC -29.008) quede JUSTO DETRAS del agujero:
+
+    centro galactico  ->  agujero negro  ->  camara
+
+Importa porque la lente solo puede deformar lo que tenga detras. El centro
+galactico tiene **245 estrellas/deg^2** contra 74.9 de media del cielo, o sea
+3.3 veces mas material que lensear. Sin orientar, la zona lensada cae en
+cualquier parte, normalmente vacia.
+
+`--behind RA DEC` permite apuntar a cualquier otro punto.
 
 Nota aparte: que el borde de la sombra salga circular en Schwarzschild es
 CORRECTO, no un bug. La asimetria requiere espin, y aun asi es debil (ver Kerr).

@@ -20,6 +20,20 @@ ROOT = Path(__file__).resolve().parents[1]
 FIG = ROOT / "results" / "figures" / "kerr_suite"
 
 LAMINAS = [
+    ("lente", "EL ENCUADRE es lo que ocultaba el lensing. Sombra 5.2 M, "
+              "anillo de Einstein 64.7 M",
+     [("lente_hw26", "half-width 26 M\nel encuadre que veniamos usando:\n"
+                     "tierra de nadie, no se ve nada"),
+      ("lente_hw50", "half-width 50 M\nempiezan a asomar los arcos"),
+      ("lente_hw80", "half-width 80 M\ncontiene el radio de Einstein"),
+      ("lente_hw130", "half-width 130 M\nel anillo queda dentro con margen")], 2),
+    ("centro", "Que parche del cielo queda detras (half-width 80 M)",
+     [("centro_galactico", "Centro galactico detras\n245 estrellas/deg^2"),
+      ("centro_sin_orientar", "Sin orientar\n74.9 estrellas/deg^2 (media)")], 2),
+    ("distancia", "Distancia de la camara: b_E = sqrt(4 M r_obs)",
+     [("dist_r200", "r_obs = 200 M\nb_E = 28 M"),
+      ("dist_r1000", "r_obs = 1000 M\nb_E = 63 M"),
+      ("dist_r5000", "r_obs = 5000 M\nb_E = 141 M")], 3),
     ("fondo", "Fondo: panorama vs estrellas puntuales (a*=0.9, i=80)",
      [("fondo_panorama", "Panorama 4096x2048\n(el cielo queda 75x mas grueso "
                          "que el render: manchas)"),

@@ -127,6 +127,11 @@ def _shade_chunk(args):
     esc = ~out["captured"]
     if esc.any():
         d = out["direction"][esc]
+        # del marco del agujero al marco del catalogo. Es lo que decide QUE
+        # parche del cielo real queda detras de la lente.
+        R = cfg.get("R_cielo")
+        if R is not None:
+            d = d @ R.T
         if _G.get("stars") is not None:
             col[esc] = _stars_color(d, cfg)
         else:
@@ -169,6 +174,52 @@ def _shade_chunk(args):
             col[np.flatnonzero(m)] += (blackbody_rgb(t_obs)
                                        * bright[:, None]).astype(np.float32)
     return col
+
+
+# Sagitario A*, el centro galactico, en coordenadas ICRS
+CENTRO_GALACTICO = (266.41683, -29.00781)
+
+
+def _rot_llevando(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Rotacion que lleva el vector unitario a sobre el b, por el arco corto."""
+    v = np.cross(a, b)
+    s, c = np.linalg.norm(v), float(a @ b)
+    if s < 1e-12:
+        return np.eye(3) if c > 0 else -np.eye(3)
+    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + vx + vx @ vx * ((1.0 - c) / s**2)
+
+
+def orientacion_cielo(ra_deg: float, dec_deg: float, theta_obs: float,
+                      roll_deg: float = 0.0) -> np.ndarray:
+    """Matriz que pasa del marco del agujero al marco ICRS del catalogo.
+
+    Coloca el punto del cielo (ra, dec) JUSTO DETRAS del agujero negro visto
+    desde la camara, de modo que la configuracion queda
+
+        (ra, dec)  ->  agujero negro  ->  camara
+
+    Apuntando al centro galactico eso pone la region mas densa del cielo detras
+    de la lente, que es donde el lensing tiene algo que deformar. Sin esto la
+    zona lensada cae en cualquier parte del cielo, normalmente vacia.
+
+    El roll gira el cielo alrededor de ese eje: no hay orientacion privilegiada,
+    el espin del agujero no guarda ninguna relacion con las coordenadas del
+    cielo real.
+    """
+    ra, dec = np.deg2rad(ra_deg), np.deg2rad(dec_deg)
+    objetivo = np.array([np.cos(dec) * np.cos(ra),
+                         np.cos(dec) * np.sin(ra),
+                         np.sin(dec)])
+    # la camara esta en (sin theta_obs, 0, cos theta_obs); detras es lo opuesto
+    detras = -np.array([np.sin(theta_obs), 0.0, np.cos(theta_obs)])
+    R = _rot_llevando(detras, objetivo)
+    if roll_deg:
+        t = np.deg2rad(roll_deg)
+        k = objetivo
+        K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+        R = (np.eye(3) + np.sin(t) * K + (1 - np.cos(t)) * K @ K) @ R
+    return R
 
 
 def load_star_catalog(path: Path, gmax: float | None = None) -> dict:
@@ -278,6 +329,15 @@ def main() -> None:
                    help="cuantas estrellas cercanas suma por pixel")
     p.add_argument("--gmax", type=float, default=None,
                    help="recorta el catalogo a magnitud <= gmax")
+    p.add_argument("--behind", nargs=2, type=float, metavar=("RA", "DEC"),
+                   default=None,
+                   help="pone ese punto del cielo (ICRS, grados) JUSTO DETRAS "
+                        "del agujero: (ra,dec) -> agujero -> camara")
+    p.add_argument("--behind-galactic-center", action="store_true",
+                   help="atajo para --behind 266.41683 -29.00781 (Sgr A*), "
+                        "la zona mas densa del cielo")
+    p.add_argument("--sky-roll", type=float, default=0.0,
+                   help="giro del cielo alrededor del eje de vision")
     p.add_argument("--sky-brightness", type=float, default=0.6)
     p.add_argument("--exposure", type=float, default=1.3)
     p.add_argument("--bloom", type=float, default=0.0, help="umbral; 0 lo apaga")
@@ -326,7 +386,16 @@ def main() -> None:
         px_rad = 2.0 * np.arctan(a.half_width / a.r_obs) / (a.width * a.ss)
         sigma = (np.deg2rad(a.star_sigma_arcsec / 3600.0)
                  if a.star_sigma_arcsec else 1.1 * px_rad)
-        cfg = {"spin": s, "r_obs": a.r_obs,
+        detras = (CENTRO_GALACTICO if a.behind_galactic_center
+                  else (tuple(a.behind) if a.behind else None))
+        R_cielo = (orientacion_cielo(detras[0], detras[1], np.deg2rad(a.inc),
+                                     a.sky_roll) if detras else None)
+        if detras and s == spins[0]:
+            print(f"  detras del agujero: RA={detras[0]:.4f} "
+                  f"DEC={detras[1]:.4f}"
+                  + ("  (centro galactico)" if a.behind_galactic_center else ""))
+
+        cfg = {"spin": s, "r_obs": a.r_obs, "R_cielo": R_cielo,
                "theta_obs": np.deg2rad(a.inc),
                "rtol": a.rtol, "atol": a.atol,
                "sky_brightness": a.sky_brightness, "disk": disk,

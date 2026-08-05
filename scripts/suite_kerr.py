@@ -31,6 +31,11 @@ GEOM = ["--half-width", "26", "--r-out", "18", "--n-images", "8",
 REVELADO = ["--exposure", "1.2", "--bloom", "0.6"]
 BASE = GEOM + REVELADO
 STARS = ["--stars", str(CAT), "--star-gain", "400", "--sky-brightness", "1.0"]
+# Para los estudios de lente hace falta ganancia alta: el flujo va como
+# 10^(-0.4 g) y entre g=2 y g=12 hay cuatro ordenes de magnitud, asi que con
+# 400 solo salen un puñado de estrellas (ver el bloque `ganancia`).
+STARS_GC = ["--stars", str(CAT), "--star-gain", "20000",
+            "--sky-brightness", "1.0"]
 MED = ["-W", "1280", "-H", "720"]
 
 
@@ -113,6 +118,54 @@ def jobs(only: str | None) -> list[dict]:
                       + ["--stars", str(CAT), "--sky-brightness", "1.0",
                          "--star-gain", "20000"]
                       + ["--spin", s, "--inc", inc]))
+
+    # ---------------------------------------------------------------------
+    # 7. EL ENCUADRE, que es lo que hacia que el lensing de las estrellas no se
+    # viera. Con la fuente en el infinito y la camara a r_obs, el radio de
+    # Einstein sale de igualar la deflexion 4M/b con el angulo b/r_obs:
+    #
+    #     b_E = sqrt(4 M r_obs)
+    #
+    # Con r_obs=1000 M eso da 63 M, medido 64.7 M. La sombra esta en 5.2 M, asi
+    # que el encuadre de 26 M que veniamos usando caia en tierra de nadie:
+    # pasado el anillo de fotones y muy corto del de Einstein.
+    GC = ["--behind-galactic-center"]
+    SIN_DISCO = ["--no-disk", "--n-images", "1"]
+    for hw in ["26", "50", "80", "130"]:
+        J.append(dict(grupo="lente", nombre=f"lente_hw{hw}",
+                      args=MED + ["--half-width", hw] + SIN_DISCO
+                      + ["--exposure", "1.0"] + STARS_GC + GC
+                      + ["--spin", "0.9", "--inc", "80"]))
+
+    # 8. Con el centro galactico detras vs sin orientar. Mismo encuadre ancho.
+    J.append(dict(grupo="centro", nombre="centro_galactico",
+                  args=MED + ["--half-width", "80"] + SIN_DISCO
+                  + ["--exposure", "1.0"] + STARS_GC + GC
+                  + ["--spin", "0.9", "--inc", "80"]))
+    J.append(dict(grupo="centro", nombre="centro_sin_orientar",
+                  args=MED + ["--half-width", "80"] + SIN_DISCO
+                  + ["--exposure", "1.0"] + STARS_GC
+                  + ["--spin", "0.9", "--inc", "80"]))
+
+    # 9. Distancia de la camara: b_E = sqrt(4 M r_obs) crece con la raiz, asi
+    # que acercarse encoge el anillo de Einstein y lo acerca a la sombra.
+    for robs, hw in [("200", "40"), ("1000", "80"), ("5000", "180")]:
+        J.append(dict(grupo="distancia", nombre=f"dist_r{robs}",
+                      args=MED + ["--half-width", hw, "--r-obs", robs]
+                      + SIN_DISCO + ["--exposure", "1.0"] + STARS_GC + GC
+                      + ["--spin", "0.9", "--inc", "80"]))
+
+    # 10. Planos generales con todo junto: disco, centro galactico detras y un
+    # encuadre que si contiene el radio de Einstein.
+    for s, hw in [("0.9", "80"), ("0.998", "80")]:
+        J.append(dict(grupo="hero3",
+                      nombre=f"hero3_a{s.replace('.','p')}_hw{hw}",
+                      args=["-W", "2560", "-H", "1440", "--ss", "2",
+                            "--half-width", hw, "--r-out", "18",
+                            "--n-images", "8", "--turbulence", "0.45",
+                            "--norm-r", "12", "--exposure", "0.9",
+                            "--bloom", "0.7"] + STARS_GC + GC
+                      + ["--spin", s, "--inc", "80"]))
 
     return [j for j in J if only is None or j["grupo"] == only]
 
