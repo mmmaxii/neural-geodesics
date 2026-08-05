@@ -131,6 +131,38 @@ estrellas reales, pero como campo continuo. Dos sutilezas que costaron:
 Para validar el lensing sin depender de nada de esto: `--grid` pinta una
 rejilla de coordenadas y la deformacion es inmediata de ver.
 
+### Pero el panorama tiene un limite duro: los primeros planos
+
+Un panorama tiene resolucion angular FIJA, y eso lo mata en cuanto la camara
+se acerca. Medido en el render heroe de Kerr: el encuadre cubre 2.98 grados en
+2560 px, o sea 4.2 arcsec/pixel, mientras que un panorama de 2048x1024 da
+633 arcsec/pixel. El cielo queda **151 veces mas grueso que el render**: cada
+pixel del panorama se estira a ~150, y las estrellas salen como manchas.
+
+No se arregla agrandando el panorama. El encuadre abarca 1/8240 del cielo, asi
+que incluso uno de 8192x4096 aporta solo 2592 pixeles propios para llenar 3.7
+millones; harian falta ~310000 px de ancho.
+
+La solucion es pintar las estrellas como **fuentes puntuales** (`--stars`).
+Una estrella como punto no tiene resolucion, es una coordenada: da igual cuanto
+se acerque la camara. Son los MISMOS datos de Gaia, solo que sin pasar por una
+imagen intermedia.
+
+Ojo con dos cosas al usarlo:
+
+- Cada estrella se trata como un disco gaussiano en el PLANO FUENTE, no en la
+  imagen. Asi la magnificacion sale sola: donde la lente amplia, mas pixeles
+  caen dentro del mismo disco. No hay que calcular ningun jacobiano.
+- El sigma tiene que ser comparable al pixel del render (por defecto 1.1
+  pixeles). Con sigma mas chico que un pixel las estrellas caen ENTRE centros
+  de pixel y desaparecen: es el mismo motivo por el que un telescopio sin PSF
+  no registraria nada.
+
+Cuando conviene cada uno: panorama para planos generales (barato y muestra el
+alabeo de estructura extendida), puntos para primeros planos (nitidos a
+cualquier zoom). Los puntos no muestran arcos, pero si imagenes multiples y
+magnificacion, que con densidad suficiente dibujan el anillo de fotones.
+
 Nota aparte: que el borde de la sombra salga circular en Schwarzschild es
 CORRECTO, no un bug. La asimetria requiere espin, y aun asi es debil (ver Kerr).
 
@@ -188,6 +220,24 @@ nula, no un `g` gigante: el brillo va con `g^4`, asi que un solo pixel mal
 tratado se lleva toda la escala. En rayos trazados de verdad la condicion
 `R(r) >= 0` lo garantiza sola: medido sobre un render completo, `g` se queda en
 [0.026, 1.49] y no aparece ni un caso prohibido.
+
+### Trampa al comparar espines: la normalizacion del disco
+
+`disk.temperature_profile` esta normalizada a MAXIMO 1, y ese maximo cae en
+`x_pico = (49/36) x_in`. Al subir el espin el ISCO baja, el pico se mete hacia
+dentro y se vuelve mucho mas caliente, asi que TODO el resto del disco queda
+pequeño en relacion a el. Renderizando varios espines sin cuidado sale que el
+disco se APAGA al girar mas rapido, y eso es falso: la eficiencia radiativa de
+un disco delgado sube del 5.7% (a=0) al 32% (a*=0.998), o sea que a igual tasa
+de acrecion un agujero que gira rapido brilla MAS.
+
+Medido: a r=18 M, donde `g` es practicamente igual para todos los espines, el
+brillo relativo caia de 0.19 a 0.003 (factor 64) solo por la normalizacion.
+
+Por eso `render_kerr.py --norm-r 12` renormaliza el perfil en un radio fijo en
+vez de en el maximo. Con eso el disco exterior queda igual entre espines y las
+diferencias se ven donde de verdad estan: en la region interior. Para comparar
+espines hay que usarlo siempre.
 
 ### Cuanto varia la sombra
 
