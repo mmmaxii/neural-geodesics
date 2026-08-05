@@ -104,13 +104,29 @@ def _stars_color(dirs, cfg):
     return col * (cfg["sky_brightness"] * cfg["star_gain"])
 
 
+# Rayos por sub-lote dentro de cada proceso. Ver _shade_chunk.
+SUBLOTE = 150_000
+
+
 def _shade_chunk(args):
-    """Traza y sombrea un bloque de pixeles. Devuelve RGB en luz lineal.
+    """Traza y sombrea un bloque de pixeles, en sub-lotes acotados.
 
     Se sombrea aqui dentro, en el hijo, para no devolver al padre las tablas
     de cruces (que con millones de rayos pesan mas que la propia imagen).
+
+    El troceado en sub-lotes NO es por elegancia: trace_batch reserva las siete
+    etapas de Dormand-Prince de golpe, o sea un array (7, N, 5). Con N = 1.2M
+    rayos eso son 336 MB por proceso, y con doce procesos a la vez se agota la
+    memoria. Un render de 2560x1440 con supersampling x2 fallaba justo asi,
+    despues de 38 minutos de trabajo tirado. Acotando N el pico de memoria deja
+    de depender de la resolucion.
     """
     alphas, betas = args
+    if alphas.size > SUBLOTE:
+        trozos = [( alphas[i:i + SUBLOTE], betas[i:i + SUBLOTE])
+                  for i in range(0, alphas.size, SUBLOTE)]
+        return np.concatenate([_shade_chunk(t) for t in trozos])
+
     cfg, k, ig = _G["cfg"], _G["metric"], _G["integ"]
     dk = cfg["disk"]
 
