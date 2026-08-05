@@ -265,7 +265,16 @@ def render(cfg: dict, width: int, height: int, half_width: float,
     W, H = width * ss, height * ss
     ax = np.linspace(-half_width, half_width, W)
     ay = np.linspace(-half_width, half_width, H) * (height / width)
-    A, B = np.meshgrid(ax, ay[::-1])            # fila 0 arriba
+    # Fila 0 arriba se corresponde con beta NEGATIVO, no positivo. En este
+    # codigo beta entra como p_theta (ver initial_from_celestial), y theta crece
+    # hacia el sur, asi que beta > 0 significa que la fuente esta al SUR.
+    # Comprobado de tres formas: una estrella puesta 8 grados al norte salia en
+    # la mitad inferior; en campo lejano la direccion asintotica de un rayo con
+    # beta > 0 tiene componente negativa sobre el eje de giro proyectado; y el
+    # render con espin 0 solo coincide con render_classical.py (que es codigo
+    # independiente y ya validado) al espejarlo. Con `ay[::-1]` toda la salida
+    # de Kerr quedaba invertida de arriba abajo.
+    A, B = np.meshgrid(ax, ay)
     flat_a, flat_b = A.ravel(), B.ravel()
     n = flat_a.size
 
