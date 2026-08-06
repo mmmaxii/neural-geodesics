@@ -18,7 +18,7 @@ La corrección: en **tiempo de Mino** (`dλ = dτ/Σ`) las ecuaciones de Kerr pa
 Requiere Python ≥ 3.10. GPU con CUDA opcional pero recomendada para entrenar (el proyecto usa una RTX 3050 de 4 GB).
 
 ```bash
-git clone https://github.com/MaximilianoValderrama/neural-geodesics.git
+git clone https://github.com/mmmaxii/neural-geodesics.git
 cd neural-geodesics
 pip install -e .
 ```
