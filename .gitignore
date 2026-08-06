@@ -54,3 +54,6 @@ desktop.ini
 # Env
 .env
 .env.local
+
+# Checkpoints de experimentos (se regeneran entrenando)
+models/checkpoints_*/

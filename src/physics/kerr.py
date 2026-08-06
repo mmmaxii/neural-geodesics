@@ -305,6 +305,56 @@ class KMetric:
                 (-2.0 * a2 * sc * Dden - N * Dden_t) / (Dden * Dden))
         return comp, d_dr, d_dt
 
+    def inverse_components_and_derivs_xp(self, r, theta, xp):
+        """Igual que la version vectorizada, pero valida para numpy Y torch.
+
+        Existe para poder correr el trazado entero en GPU. Las formulas son las
+        mismas; lo unico que cambia es que aqui no se usa nada especifico de
+        numpy, asi que el mismo codigo sirve con tensores de torch en CUDA.
+        """
+        M, a = self.M, self.a
+        lo, hi = self.AXIS_EPS, np.pi - self.AXIS_EPS
+        theta = theta.clamp(lo, hi) if hasattr(theta, "clamp") else np.clip(theta, lo, hi)
+        s = xp.sin(theta)
+        c_ = xp.cos(theta)
+        s2 = s * s
+        sc = s * c_
+        a2 = a * a
+        r2 = r * r
+
+        S = r2 + a2 * c_ * c_
+        D = r2 - 2.0 * M * r + a2
+        r2a2 = r2 + a2
+        A = r2a2 * r2a2 - a2 * D * s2
+        P = S * D
+        P2 = P * P
+        S2 = S * S
+        N = D - a2 * s2
+
+        comp = (-A / P, -2.0 * M * a * r / P, D / S, 1.0 / S, N / (P * s2))
+
+        S_r = 2.0 * r
+        D_r = 2.0 * (r - M)
+        A_r = 4.0 * r * r2a2 - a2 * s2 * D_r
+        P_r = S_r * D + S * D_r
+        d_dr = (-(A_r * P - A * P_r) / P2,
+                -2.0 * M * a * (P - r * P_r) / P2,
+                (D_r * S - D * S_r) / S2,
+                -S_r / S2,
+                (D_r * P - N * P_r) / (P2 * s2))
+
+        S_t = -2.0 * a2 * sc
+        A_t = -2.0 * a2 * D * sc
+        P_t = S_t * D
+        Dden = P * s2
+        Dden_t = P_t * s2 + P * 2.0 * sc
+        d_dt = (-(A_t * P - A * P_t) / P2,
+                2.0 * M * a * r * P_t / P2,
+                -D * S_t / S2,
+                -S_t / S2,
+                (-2.0 * a2 * sc * Dden - N * Dden_t) / (Dden * Dden))
+        return comp, d_dr, d_dt
+
     # ------------------------------------------------------------ estructura
     def r_ergosphere(self, theta):
         """Borde exterior de la ergosfera: donde g_tt = 0.

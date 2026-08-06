@@ -319,6 +319,186 @@ class KerrGeodesicIntegrator:
             out.update(cross_r=cross_r, cross_phi=cross_phi, n_cross=n_cross)
         return out
 
+    # ============================================================ en la GPU
+    def trace_batch_torch(self, alphas, betas, r_obs: float, theta_obs: float,
+                          rtol: float = 1e-6, atol: float = 1e-8,
+                          max_steps: int = 20000, device: str = "cuda",
+                          dtype: str = "float32",
+                          disk_in: float | None = None,
+                          disk_out: float | None = None,
+                          max_crossings: int = 6) -> dict:
+        """Mismo trazado que trace_batch(), pero con tensores de torch en GPU.
+
+        El integrador ya era algebra vectorizada pura, asi que llevarlo a CUDA
+        no cambia nada de la fisica: son las mismas etapas de Dormand-Prince con
+        el mismo control de error por rayo. Lo unico que cambia es donde viven
+        los arrays.
+
+        A diferencia de la version de numpy, aqui NO se van sacando del lote los
+        rayos que terminan. Compactar el array en cada paso cuesta mas en GPU
+        (obliga a mover memoria) que dejar que los terminados sigan ocupando su
+        carril y simplemente enmascarar sus actualizaciones.
+        """
+        import torch
+        dev = torch.device(device)
+        # float32 por defecto: en las GeForce la doble precision va a 1/64 de la
+        # simple (medido en esta tarjeta: 0.11 frente a 4.39 TFLOPS), asi que en
+        # float64 la GPU no puede ganarle a la CPU por mucho que se vectorice.
+        f64 = torch.float64 if dtype == "float64" else torch.float32
+        al = torch.as_tensor(np.atleast_1d(alphas), dtype=f64, device=dev)
+        be = torch.as_tensor(np.atleast_1d(betas), dtype=f64, device=dev)
+        n = al.numel()
+        k = self.k
+
+        st = float(np.sin(theta_obs))
+        E = torch.ones(n, dtype=f64, device=dev)
+        L = -al * st
+        y = torch.zeros(n, 5, dtype=f64, device=dev)
+        y[:, 0] = r_obs
+        y[:, 1] = theta_obs
+        y[:, 4] = be
+        comp, _, _ = k.inverse_components_and_derivs_xp(
+            torch.full((n,), r_obs, dtype=f64, device=dev),
+            torch.full((n,), theta_obs, dtype=f64, device=dev), xp=torch)
+        rest = (comp[0] * E**2 - 2.0 * comp[1] * E * L
+                + comp[4] * L**2 + comp[3] * be**2)
+        y[:, 3] = -torch.sqrt(torch.clamp(-rest / comp[2], min=0.0))
+
+        r_esc = 1.05 * r_obs
+        r_cap = k.r_horizon * 1.0001
+        A_ = [torch.as_tensor(a, dtype=f64, device=dev) for a in self._A]
+        B_ = torch.as_tensor(self._B, dtype=f64, device=dev)
+        Er = torch.as_tensor(self._E, dtype=f64, device=dev)
+
+        vivo = torch.ones(n, dtype=torch.bool, device=dev)
+        cap = torch.zeros(n, dtype=torch.bool, device=dev)
+        fin = torch.zeros(n, dtype=torch.bool, device=dev)
+        h = torch.full((n,), 0.5, dtype=f64, device=dev)
+        # estado final de cada rayo, en el indice ORIGINAL. Hace falta porque al
+        # compactar se pierden los carriles de los que ya terminaron, y la
+        # direccion de salida se calcula al final para todos.
+        y_fin = y.clone()
+
+        want = disk_in is not None and disk_out is not None
+        if want:
+            cr = torch.zeros(n, max_crossings, dtype=f64, device=dev)
+            cp = torch.zeros(n, max_crossings, dtype=f64, device=dev)
+            nc = torch.zeros(n, dtype=torch.long, device=dev)
+
+        def rhs(yy):
+            comp, dr_, dt_ = k.inverse_components_and_derivs_xp(
+                yy[:, 0], yy[:, 1], xp=torch)
+            pt, pr, pth = -E, yy[:, 3], yy[:, 4]
+            pt2, pl2, pr2, pth2, ptl = pt*pt, L*L, pr*pr, pth*pth, 2.0*pt*L
+            out = torch.empty_like(yy)
+            out[:, 0] = comp[2] * pr
+            out[:, 1] = comp[3] * pth
+            out[:, 2] = comp[1] * pt + comp[4] * L
+            out[:, 3] = -0.5 * (dr_[0]*pt2 + dr_[1]*ptl + dr_[2]*pr2
+                                + dr_[3]*pth2 + dr_[4]*pl2)
+            out[:, 4] = -0.5 * (dt_[0]*pt2 + dt_[1]*ptl + dt_[2]*pr2
+                                + dt_[3]*pth2 + dt_[4]*pl2)
+            return out
+
+        # indice de cada carril hacia la fila original, para poder compactar
+        orig = torch.arange(n, device=dev)
+
+        for paso in range(max_steps):
+            # Compactar cada cierto numero de pasos. Sin esto se siguen
+            # integrando rayos ya terminados hasta que acaba el ultimo, y como
+            # los del anillo de fotones dan muchisimas vueltas, eso multiplica
+            # el trabajo por diez. Compactar cuesta mover memoria, asi que no
+            # compensa hacerlo en cada paso: solo cuando ya sobra la mitad.
+            if paso % 25 == 0 and paso > 0:
+                viv = vivo.nonzero(as_tuple=True)[0]
+                if viv.numel() == 0:
+                    break
+                if viv.numel() < 0.5 * y.shape[0]:
+                    y, h, E, L = y[viv], h[viv], E[viv], L[viv]
+                    vivo = vivo[viv]
+                    orig = orig[viv]
+            if not bool(vivo.any()):
+                break
+            m = y.shape[0]
+            ks = torch.empty(7, m, 5, dtype=f64, device=dev)
+            ks[0] = rhs(y)
+            for i in range(1, 7):
+                acc = torch.einsum("j,jnm->nm", A_[i], ks[:i])
+                ks[i] = rhs(y + h[:, None] * acc)
+            y_new = y + h[:, None] * torch.einsum("j,jnm->nm", B_, ks)
+            err = h[:, None] * torch.einsum("j,jnm->nm", Er, ks)
+            esc_ = atol + rtol * torch.maximum(y.abs(), y_new.abs())
+            en = torch.sqrt(((err / esc_) ** 2).mean(dim=1))
+
+            bien = (en <= 1.0) & vivo
+            fac = torch.clamp(0.9 * torch.where(en > 0, en, torch.full_like(en, 1e-10)) ** -0.2,
+                              0.2, 5.0)
+
+            if want and bool(bien.any()):
+                d_old = y[:, 1] - np.pi / 2
+                d_new = y_new[:, 1] - np.pi / 2
+                cruza = bien & ((d_old * d_new) < 0)
+                if bool(cruza.any()):
+                    f = d_old / (d_old - d_new)
+                    rc = y[:, 0] + f * (y_new[:, 0] - y[:, 0])
+                    pc = y[:, 2] + f * (y_new[:, 2] - y[:, 2])
+                    ok = cruza & (rc >= disk_in) & (rc <= disk_out)
+                    idx = torch.nonzero(ok, as_tuple=True)[0]
+                    if idx.numel():
+                        go = orig[idx]
+                        hueco = nc[go] < max_crossings
+                        idx, go = idx[hueco], go[hueco]
+                        if idx.numel():
+                            cr[go, nc[go]] = rc[idx]
+                            cp[go, nc[go]] = pc[idx]
+                            nc[go] += 1
+
+            y = torch.where(bien[:, None], y_new, y)
+            h = torch.where(vivo, h * fac, h)
+
+            rr = y[:, 0]
+            cae = bien & (rr <= r_cap)
+            sale = bien & (rr >= r_esc)
+            term = cae | sale
+            if bool(term.any()):
+                gt = orig[term]
+                cap[gt] |= cae[term]
+                fin[gt] = True
+                # guardar el estado final ANTES de que la compactacion se lleve
+                # esos carriles; despues ya no se podria recuperar
+                y_fin[gt] = y[term]
+                vivo = vivo & ~term
+
+        cap |= ~fin                      # los que agotaron pasos, a negro
+        if bool((~fin).any()):
+            pend = (~fin).nonzero(as_tuple=True)[0]
+            aun = (orig[..., None] == pend).any(-1) if orig.numel() else None
+            if aun is not None and bool(aun.any()):
+                y_fin[orig[aun]] = y[aun]
+
+        y = y_fin
+        E = torch.ones(n, dtype=f64, device=dev)
+        L = -al * st
+        comp, _, _ = k.inverse_components_and_derivs_xp(y[:, 0], y[:, 1], xp=torch)
+        dr = comp[2] * y[:, 3]
+        dth = comp[3] * y[:, 4]
+        dph = comp[1] * (-E) + comp[4] * L
+        rr, th_, ph_ = y[:, 0], y[:, 1], y[:, 2]
+        s_, c_ = torch.sin(th_), torch.cos(th_)
+        sp, cp_ = torch.sin(ph_), torch.cos(ph_)
+        v = torch.stack([dr*s_*cp_ + rr*dth*c_*cp_ - rr*dph*s_*sp,
+                         dr*s_*sp + rr*dth*c_*sp + rr*dph*s_*cp_,
+                         dr*c_ - rr*dth*s_], dim=1)
+        v = v / v.norm(dim=1, keepdim=True).clamp_min(1e-30)
+
+        out = {"direction": v.cpu().numpy(), "captured": cap.cpu().numpy(),
+               "L": L.cpu().numpy(), "unfinished": 0}
+        if want:
+            out.update(cross_r=cr.cpu().numpy().astype(np.float32),
+                       cross_phi=cp.cpu().numpy().astype(np.float32),
+                       n_cross=nc.cpu().numpy().astype(np.int8))
+        return out
+
     def _sky_direction_vec(self, y, E, L) -> np.ndarray:
         """Direccion asintotica para un lote de rayos."""
         r, th, ph, pr, pth = y[:, 0], y[:, 1], y[:, 2], y[:, 3], y[:, 4]
