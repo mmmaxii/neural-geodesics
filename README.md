@@ -6,8 +6,10 @@
 
 El proyecto tiene dos mitades que comparten una misma idea: en vez de integrar la ecuación de la geodésica rayo a rayo con un método numérico clásico (caro, y más aún con espín), se entrena una red que **aprende la solución de esa ecuación diferencial** — no el mapa final píxel→imagen — y se usa esa red para renderizar en tiempo real.
 
-- **Schwarzschild** (sin espín): pipeline completo y validado. La red aprende `u(φ)`, la órbita del fotón, con MAE 4.3e-5 y 51× más rápida que RK45.
-- **Kerr** (con espín): el renderer clásico por fuerza bruta está completo y validado a 1e-8. El surrogate neuronal se está rehaciendo en **tiempo de Mino**, donde la ecuación geodésica de Kerr se desacopla exactamente en una parte radial y una polar — el análogo directo de lo que funcionó en Schwarzschild. Es el trabajo en curso ahora mismo (ver [Estado actual](#estado-actual)).
+- **Schwarzschild** (sin espín): la red aprende `u(φ)`, la órbita del fotón, con **MAE 4.3e-5** y **51× más rápida** que RK45. Aquí el integrador clásico sí es el cuello de botella, y la red lo sustituye.
+- **Kerr** (con espín): renderer clásico por fuerza bruta validado a 1e-8, y un renderer nuevo en **tiempo de Mino** que reproduce el trazado exacto a **0.001 px** con **5-6× de speedup** y la sombra idéntica píxel a píxel.
+
+> **Hallazgo del proyecto**: en tiempo de Mino las geodésicas de Kerr resultan ser *analíticamente resolubles*, así que para Kerr la red **no hace falta** para la precisión — el camino exacto es 3500× más preciso al mismo coste. Se documenta en [docs/mino.md](docs/mino.md), junto con los resultados negativos y los bugs que costaron tiempo.
 
 ## Por qué existe este enfoque
 
@@ -65,12 +67,23 @@ python scripts/render_neural.py --compare   # error medido: ~13 px vs el clásic
 python scripts/visor_neural.py              # visor interactivo en vivo
 ```
 
-### Kerr — surrogate en tiempo de Mino (en desarrollo)
-La capa física exacta (raíces del polinomio radial, clasificación de la sombra, integrales elípticas, tiempo de Mino) ya está escrita y validada:
+### Kerr — tiempo de Mino (el camino actual)
 ```bash
+# validar la capa física exacta contra el integrador hamiltoniano (6 tests)
 python scripts/validate_kerr_mino.py --etapa 0
+
+# renderizar, y comparar contra el trazador clásico midiendo el error en PÍXELES
+python scripts/render_kerr_mino.py --spin 0.9 --inc 85 --mu-exacto --compare
+
+# sin --mu-exacto usa la red para cos(theta): más rápido de evaluar, menos preciso
+python scripts/render_kerr_mino.py --spin 0.9 --inc 85 --compare
 ```
-El generador de datasets, el entrenamiento y el renderer neuronal nuevo (`scripts/generate_kerr_mino_data.py`, `scripts/train_kerr_mino.py`, `scripts/render_kerr_mino.py`) están en construcción — ver el estado detallado abajo.
+
+Para regenerar los datasets y reentrenar las redes:
+```bash
+python scripts/generate_kerr_mino_data.py --etapa ambos -j 10
+python scripts/train_kerr_mino.py --etapa ambos
+```
 
 ## Estructura del proyecto
 
@@ -98,9 +111,22 @@ neural-geodesics/
 | Métrica y integrador hamiltoniano de Kerr | ✅ Validado a 1e-8 (sombra, Hamiltoniano, reducción a a=0) |
 | Renderer clásico de Kerr (fuerza bruta, CPU y GPU) | ✅ Completo, con disco y cielo de Gaia |
 | Surrogate neuronal de Kerr — enfoque anterior (imagen→imagen) | ⚠️ Funcional, conservado como baseline; ~13 px de error, falla cerca del anillo de fotones |
-| Capa analítica de tiempo de Mino (raíces, sombra exacta, integrales elípticas) | ✅ Escrita y validada contra el integrador hamiltoniano |
-| Datasets, redes y entrenamiento en tiempo de Mino | 🚧 En desarrollo |
-| Renderer neuronal nuevo con `--compare` | 🚧 Pendiente |
+| Capa analítica de tiempo de Mino (raíces, sombra exacta, integrales elípticas) | ✅ Validada contra el integrador hamiltoniano: dirección de escape 3e-8 rad, θ final 2e-9 rad |
+| Datasets en tiempo de Mino (50k tracks polares + 159k radiales) | ✅ Generados |
+| Redes `Net_r` y `Net_θ` + entrenamiento | ✅ Entrenadas (`Net_r`: MAE 1.5e-4) |
+| Renderer de Kerr en tiempo de Mino con `--compare` | ✅ **0.001 px de error, sombra 100% idéntica, 5-6× speedup** |
+
+### Precisión medida del renderer de Kerr en tiempo de Mino
+
+Contra el trazador clásico, malla de 160×90, sobre `a ∈ {0, 0.5, 0.9, 0.998}` × `inc ∈ {30°, 60°, 85°}`:
+
+| Métrica | Resultado |
+|---|---|
+| Clasificación de la sombra | 100% de píxeles idénticos (sale en forma cerrada, no de una red) |
+| Dirección de escape | 0.001 px de media, 0.000 px de mediana |
+| Speedup | 5.1× – 6.1× |
+
+Para comparar: el surrogate anterior (imagen→imagen) se quedaba en ~13 px y fallaba justo en el anillo de fotones.
 
 El objetivo de la etapa en curso: igualar en Kerr lo que ya se logró en Schwarzschild — una red que resuelve la ecuación diferencial en vez de interpolar renders, validada punto a punto contra el integrador, con error final por debajo de ~1-2 píxeles.
 
