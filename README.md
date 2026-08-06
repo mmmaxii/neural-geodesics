@@ -1,6 +1,6 @@
 # Neural Geodesics
 
-![Agujero negro de Kerr renderizado por el proyecto](results/figures/kerr_hero.png)
+![Agujero negro de Kerr renderizado por el proyecto](docs/kerr_hero.png)
 
 > **Trazado de rayos alrededor de agujeros negros (Schwarzschild y Kerr), acelerado con redes neuronales que resuelven la ecuación geodésica en vez de interpolar imágenes.**
 
