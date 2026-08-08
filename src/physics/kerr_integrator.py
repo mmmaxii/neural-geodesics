@@ -189,7 +189,8 @@ class KerrGeodesicIntegrator:
                     rtol: float = 1e-6, atol: float = 1e-8,
                     max_steps: int = 20000, progress=None,
                     disk_in: float | None = None, disk_out: float | None = None,
-                    max_crossings: int = 6) -> dict:
+                    max_crossings: int = 6,
+                    r_escape: float | None = None) -> dict:
         """Traza N rayos SIMULTANEAMENTE. Devuelve direcciones y capturas.
 
         Cada rayo lleva su PROPIO paso adaptativo: el control de error es por
@@ -229,7 +230,12 @@ class KerrGeodesicIntegrator:
                 + comp[3]*betas**2)
         y[:, 3] = -np.sqrt(np.maximum(-rest / comp[2], 0.0))
 
-        r_esc = 1.05 * r_obs
+        # Radio al que se da el rayo por escapado y se lee su direccion. El
+        # 1.05 r_obs de siempre vale mientras la camara este lejos, pero es
+        # demasiado justo con la camara cerca: medido, a r_obs = 30 M sesga la
+        # direccion hasta 2.5 px, porque a 32 M al rayo aun le queda curvatura
+        # por delante. A 10 r_obs el sesgo ya es de 0.004 px.
+        r_esc = 1.05 * r_obs if r_escape is None else float(r_escape)
         r_cap = self.k.r_horizon * 1.0001
 
         alive = np.arange(n)
@@ -326,7 +332,8 @@ class KerrGeodesicIntegrator:
                           dtype: str = "float32",
                           disk_in: float | None = None,
                           disk_out: float | None = None,
-                          max_crossings: int = 6) -> dict:
+                          max_crossings: int = 6,
+                          r_escape: float | None = None) -> dict:
         """Mismo trazado que trace_batch(), pero con tensores de torch en GPU.
 
         El integrador ya era algebra vectorizada pura, asi que llevarlo a CUDA
@@ -364,7 +371,7 @@ class KerrGeodesicIntegrator:
                 + comp[4] * L**2 + comp[3] * be**2)
         y[:, 3] = -torch.sqrt(torch.clamp(-rest / comp[2], min=0.0))
 
-        r_esc = 1.05 * r_obs
+        r_esc = 1.05 * r_obs if r_escape is None else float(r_escape)
         r_cap = k.r_horizon * 1.0001
         A_ = [torch.as_tensor(a, dtype=f64, device=dev) for a in self._A]
         B_ = torch.as_tensor(self._B, dtype=f64, device=dev)

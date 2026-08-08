@@ -107,7 +107,12 @@ def main():
 
         t0 = time.perf_counter()
         pre = eng.precalcular(a, th, args.r_obs, al, be, n_cruces=args.n_cruces)
-        geo = eng.evaluar(pre, net_r, net_th, device, mu_exacto=args.mu_exacto)
+        # semilla="red" EXPLICITO: este script existe para validar las redes, y
+        # desde la ablacion del 2026-08-08 el motor usa por defecto la semilla
+        # analitica. Sin fijarlo aqui, este validador dejaria de tocar KerrRNet
+        # y seguiria diciendo que la valida.
+        geo = eng.evaluar(pre, net_r, net_th, device, mu_exacto=args.mu_exacto,
+                          semilla="red")
         t_neural += time.perf_counter() - t0
 
         t0 = time.perf_counter()

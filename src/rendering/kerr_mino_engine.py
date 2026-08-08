@@ -46,13 +46,21 @@ def _f64(v, n, device):
 
 def precalcular(a: float, theta_obs: float, r_obs: float, alpha: np.ndarray,
                 beta: np.ndarray, r_esc_factor: float = 1.05,
-                n_cruces: int = 6) -> dict:
+                n_cruces: int = 6, r_esc: float | None = None) -> dict:
     """Todo el precalculo EXACTO en float64. No toca ninguna red.
 
     Devuelve, ademas de las constantes por pixel, la tabla (n, n_cruces) de
     tiempos de Mino en los que el rayo cruza el ecuador. Esa tabla es exacta:
     los cruces caen en fases FIJAS del ciclo polar (x = 1/4 + k/2), no hay que
     detectarlos por cambio de signo como en el trazador clasico.
+
+    r_esc fija en que radio se lee la direccion de escape. Con r_esc = None se
+    conserva el viejo r_esc_factor * r_obs, que solo vale con la camara lejos:
+    medido, a r_obs = 30 M sesga la direccion hasta 2.5 px porque al rayo aun
+    le queda curvatura por delante. Aqui subirlo es gratis -- lambda(r_esc) es
+    una integral de Carlson, no un trazado -- y ademas no saca a las redes de
+    su dominio, porque en el punto de escape r se conoce exacto y a la red de
+    theta se le pasa la fase ya plegada.
     """
     alpha = np.asarray(alpha, np.float64)
     beta = np.asarray(beta, np.float64)
@@ -68,7 +76,9 @@ def precalcular(a: float, theta_obs: float, r_obs: float, alpha: np.ndarray,
     respaldo = (eta <= km.ETA_MIN) | (np.abs(xi) < XI_MIN)
 
     lam_cam = km.integral_mino_radial(r_ancla, np.full(n, r_obs), R)
-    r_esc = r_esc_factor * r_obs
+    if r_esc is None:
+        r_esc = r_esc_factor * r_obs
+    r_esc = max(float(r_esc), r_esc_factor * r_obs)
     lam_esc = km.integral_mino_radial(r_ancla, np.full(n, r_esc), R)
     lam_inf = km.integral_mino_radial_inf(r_ancla, R)
 
@@ -103,7 +113,35 @@ def precalcular(a: float, theta_obs: float, r_obs: float, alpha: np.ndarray,
             "sigma_k": sigma_k, "valido_k": valido_k, "x_k": x_k}
 
 
-def _consultar_r(net_r, pre, idx, ell, device, r_conocido=None, refinar=True):
+def semilla_cruda(pre, idx, ell):
+    """Semilla analitica de r(lambda), sin tocar ninguna red.
+
+    Con lambda anclado en el punto de retorno (o en r_stop si el rayo cae), la
+    curva r(lambda) tiene los dos extremos conocidos en forma cerrada:
+
+        lambda = 0        ->  r = r_ancla
+        lambda = lam_inf  ->  r = infinito
+
+    y ademas se conoce COMO diverge: en campo lejano R(r) ~ r^4, asi que
+    dlambda = dr/r^2 y por tanto lam_inf - lambda = 1/r al orden dominante.
+    La interpolacion mas simple que respeta las tres cosas es
+
+        r = r_ancla + 1/(lam_inf - lambda) - 1/lam_inf
+
+    Vale exactamente en los dos extremos y acierta la asintotica de la cola,
+    que es justo donde la red es PEOR (su ratio_u = r_ancla/r cae a ~5e-4 en
+    campo lejano y el error relativo se dispara).
+
+    Existe para poder responder la pregunta de la ablacion: si Newton converge
+    igual desde aqui que desde la red, la red no esta aportando el resultado.
+    """
+    lam_inf = pre["lam_inf"][idx]
+    hueco = np.maximum(lam_inf - ell, 1e-12)
+    return pre["r_ancla"][idx] + 1.0 / hueco - 1.0 / np.maximum(lam_inf, 1e-12)
+
+
+def _consultar_r(net_r, pre, idx, ell, device, r_conocido=None, refinar=True,
+                 semilla="cruda", n_iter=6):
     """r y Phi_r acumulado desde el anclaje, en los tiempos de Mino ell.
 
     La red da r(lambda) -- la inversion de la cuadratura, que es lo unico sin
@@ -116,32 +154,55 @@ def _consultar_r(net_r, pre, idx, ell, device, r_conocido=None, refinar=True):
       3. Phi_r sale de la cuadratura exacta en la variable w, NUNCA de la
          cabeza de red: medido en el renderer, esa cabeza daba ~2.5e-3 rad de
          error angular (unos 25 pixeles) y era la fuente dominante.
+
+    `semilla` elige de donde sale el punto de partida de Newton: "red"
+    (KerrRNet) o "cruda" (semilla_cruda, sin red). Con "cruda" no hace falta
+    pasar net_r. Junto con refinar=False y n_iter, permite separar los tres
+    caminos -- clasico puro, red pura, hibrido -- y medir cual paga.
     """
     n = ell.size
     if r_conocido is not None:
         r = np.broadcast_to(np.asarray(r_conocido, np.float64), (n,)).copy()
     else:
-        t = lambda v: torch.as_tensor(np.ascontiguousarray(v),
-                                      dtype=torch.float64, device=device)
-        with torch.no_grad():
-            feats = net_r.norm.features(
-                t(pre["delta_gap"][idx]), t(pre["lado"][idx]), t(pre["xi"][idx]),
-                t(pre["eta"][idx]), _f64(pre["a"], n, device),
-                t(1.0 / pre["r_ancla"][idx]), t(1.0 / pre["r_plateau"][idx]),
-                t(ell), t(pre["lam_inf"][idx]), xp=torch)
-            ratio_u, _ = net_r(feats)
-        r = pre["r_ancla"][idx] / np.maximum(ratio_u.cpu().numpy(), 1e-12)
+        if semilla == "cruda":
+            r = semilla_cruda(pre, idx, ell)
+        else:
+            t = lambda v: torch.as_tensor(np.ascontiguousarray(v),
+                                          dtype=torch.float64, device=device)
+            with torch.no_grad():
+                feats = net_r.norm.features(
+                    t(pre["delta_gap"][idx]), t(pre["lado"][idx]),
+                    t(pre["xi"][idx]), t(pre["eta"][idx]),
+                    _f64(pre["a"], n, device),
+                    t(1.0 / pre["r_ancla"][idx]), t(1.0 / pre["r_plateau"][idx]),
+                    t(ell), t(pre["lam_inf"][idx]), xp=torch)
+                ratio_u, _ = net_r(feats)
+            r = pre["r_ancla"][idx] / np.maximum(ratio_u.cpu().numpy(), 1e-12)
         r = np.maximum(r, pre["r_ancla"][idx])
-        if refinar:
-            # 6 iteraciones, no 3: medido, con 3 el p99 del error en el radio de
-            # los cruces se iba a 7.5e-3 M porque la semilla de la red es mala
-            # en la cola (su error RELATIVO crece en campo lejano) y Newton no
-            # llegaba a converger. Cada iteracion es una llamada a Carlson,
-            # barata, y desde una semilla cruda bastan 6 para precision de
-            # maquina -- asi el resultado deja de depender de la calidad de la
-            # semilla.
+        if refinar and n_iter > 0:
+            # Por que la semilla por defecto es la CRUDA y no la red
+            # ----------------------------------------------------------------
+            # Medido en la ablacion del 2026-08-08 (benchmark --ablacion), sobre
+            # 170k cruces y tres configuraciones de espin/inclinacion:
+            #
+            #   semilla   iter   |dr| p99    |dr| PEOR   cruces nan
+            #   cruda        4    3.0e-13     4.7e-08 M       0
+            #   red          6    5.0e-13     3.1e+01 M      67
+            #
+            # O sea que la red no solo no ayuda: HACE DANO. Newton desde la
+            # semilla analitica converge en 4 iteraciones a precision de
+            # maquina, mientras que desde la red sigue con 31 M de error a las
+            # 6 -- porque la red llega a errar 3.3e3 M en su peor rayo y desde
+            # ahi Newton cae por debajo de una raiz real, saca la raiz de un
+            # negativo y devuelve nan. Los cruces nan que el renderer
+            # descartaba en silencio salian TODOS de aqui: con semilla cruda
+            # son cero en las tres configuraciones.
+            #
+            # Se dejan 6 iteraciones y no 4 por margen; cada una es una llamada
+            # a Carlson y son baratas.
             r = km.refinar_r(r, ell, pre["raices"][:, idx],
-                             pre["r_ancla"][idx], pre["escapa"][idx], n_iter=6)
+                             pre["r_ancla"][idx], pre["escapa"][idx],
+                             n_iter=n_iter)
 
     phi, _ = km.integral_phi_r(r, pre["raices"][:, idx], pre["r_ancla"][idx],
                                pre["escapa"][idx], pre["xi"][idx], pre["a"])
@@ -202,7 +263,8 @@ def _consultar_theta(net_theta, pre, idx, x, device, g_exacto=True,
 
 
 def evaluar(pre: dict, net_r, net_theta, device: str = "cpu",
-            mu_exacto: bool = False) -> dict:
+            mu_exacto: bool = False, semilla: str = "cruda",
+            refinar: bool = True, n_iter: int = 6) -> dict:
     """Geometria por pixel: cruces con el disco y direccion de escape.
 
     Devuelve
@@ -211,6 +273,20 @@ def evaluar(pre: dict, net_r, net_theta, device: str = "cpu",
         direccion          : (n, 3)         direccion asintotica, unitaria
         captured           : (n,)           dentro de la sombra
         respaldo           : (n,)           pixeles para el trazador clasico
+
+    semilla="cruda" es el DEFECTO desde la ablacion del 2026-08-08: con ella el
+    motor no consulta KerrRNet en ningun momento y net_r puede ser None. La
+    razon esta medida y documentada en _consultar_r -- la semilla de red daba
+    31 M de error en el peor cruce y era la fuente de todos los cruces nan.
+    semilla="red" se conserva para poder reproducir la ablacion y para
+    validate_kerr_mino_net.py, que la fija explicitamente.
+
+    Nota de alcance: la red de r SOLO intervenia en los cruces con el disco. En
+    la camara y en el punto de escape se pasa r_conocido (r_obs y r_esc son
+    exactos por construccion), asi que un render --no-disk nunca la uso.
+    Despues de este cambio, lo UNICO que hace una red en este motor es mu(x)
+    cuando mu_exacto=False -- y eso cuesta 1.1 px frente a 0.001 px, sin ganar
+    velocidad (0.98x, benchmark del 2026-08-07).
     """
     n, nk = pre["n"], pre["sigma_k"].shape[1]
     escapa, respaldo = pre["escapa"], pre["respaldo"]
@@ -238,7 +314,11 @@ def evaluar(pre: dict, net_r, net_theta, device: str = "cpu",
         ell = np.where(esc_f, np.abs(lr), np.maximum(lr, 0.0))
         signo = np.where(esc_f, np.where(lr < 0, -1.0, 1.0), 1.0)
 
-        r_q, Phi_q = _consultar_r(net_r, pre, fi, ell, device)
+        # UNICO punto del motor donde r sale de la red (o de la semilla cruda):
+        # aqui el radio del cruce no se conoce de antemano.
+        r_q, Phi_q = _consultar_r(net_r, pre, fi, ell, device,
+                                  refinar=refinar, semilla=semilla,
+                                  n_iter=n_iter)
         # Phi_r acumulado DESDE LA CAMARA. Si el rayo escapa, la camara esta en
         # lambda_r = -lam_cam y Phi anclado es IMPAR en lambda_r (porque
         # f_r(r(lambda)) es par), asi que Phi^anc(-lam_cam) = -Phi_cam y

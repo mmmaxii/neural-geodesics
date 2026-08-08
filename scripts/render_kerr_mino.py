@@ -7,10 +7,25 @@ integrando una EDO de cinco variables por pixel.
 
     python scripts/render_kerr_mino.py --spin 0.9 --inc 85 -W 480 -H 270
     python scripts/render_kerr_mino.py --spin 0.9 --inc 85 --compare
+    python scripts/render_kerr_mino.py --spin 0 --grid --no-disk --fov-deg 60 --r-obs 20
 
 --compare renderiza la MISMA escena por los dos caminos y mide la diferencia en
 pixeles, que es la unidad que importa: un error angular pequeno puede ser
 enorme si el encuadre es cerrado.
+
+La camara
+---------
+El encuadre lo fija --fov-deg, un campo de vision angular de verdad, y la
+distancia --r-obs va aparte. Antes el encuadre era --half-width, en unidades de
+M: eso es un parametro de impacto, no un angulo, y como la sombra mide siempre
+~5 M en esas coordenadas la consecuencia era que al mover la distancia la
+sombra NO cambiaba de tamano y lo unico que se movia era la escala del fondo.
+Parecia que el agujero estaba clavado y que se alejaba el cielo. Ahora
+acercarse agranda la sombra y el anillo, y el fondo se queda donde estaba.
+La conversion pixel -> rayo la hace physics/kerr_camera.py por la tetrada del
+observador local; --half-width sigue aceptandose para reproducir encuadres
+viejos. Para MIRAR si el lensing esta bien, usar --grid: un campo de estrellas
+no delata un mapeo espejado y una rejilla si.
 """
 from __future__ import annotations
 
@@ -30,27 +45,14 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 import physics.disk as D                                       # noqa: E402
+import physics.kerr_camera as kc                                # noqa: E402
 import rendering.kerr_mino_engine as eng                       # noqa: E402
 from physics.kerr import KMetric                               # noqa: E402
 from physics.kerr_integrator import KerrGeodesicIntegrator     # noqa: E402
 from models.kerr_mino_net import KerrRNet, KerrThetaNet        # noqa: E402
 from rendering.classical_renderer import (                     # noqa: E402
-    blackbody_rgb, bloom, disk_turbulence, load_sky_image, sample_equirect,
-    star_texture, tonemap)
-
-
-def malla_imagen(width, height, half_width):
-    """Plano imagen en coordenadas de Bardeen, igual que render_kerr.py:265-277.
-
-    OJO con el signo de beta: la fila 0 (arriba) es beta NEGATIVO. beta entra
-    como p_theta y theta crece hacia el sur, asi que beta > 0 pone la fuente al
-    SUR. Invertir esto espeja el render entero de arriba abajo -- fue un bug
-    real, documentado en render_kerr.py.
-    """
-    ax = np.linspace(-half_width, half_width, width)
-    ay = np.linspace(-half_width, half_width, height) * (height / width)
-    A, B = np.meshgrid(ax, ay)
-    return A.ravel(), B.ravel()
+    blackbody_rgb, bloom, disk_turbulence, grid_texture, load_sky_image,
+    sample_equirect, star_texture, tonemap)
 
 
 def sombrear(geo, cfg, k, sky_tex):
@@ -73,7 +75,12 @@ def sombrear(geo, cfg, k, sky_tex):
             d = d @ R.T
         th_s = np.arccos(np.clip(d[:, 2], -1.0, 1.0))
         lo_s = np.arctan2(d[:, 1], d[:, 0])
-        if sky_tex is not None:
+        if cfg.get("grid"):
+            # rejilla de coordenadas: si el mapeo pixel -> direccion esta
+            # girado o espejado, una rejilla lo canta y un campo de estrellas
+            # no. Es la referencia visual que usa el renderer de Schwarzschild.
+            col[esc] = grid_texture(th_s, lo_s)
+        elif sky_tex is not None:
             col[esc] = sample_equirect(sky_tex, th_s, lo_s, cfg["sky_brightness"])
         else:
             col[esc] = star_texture(th_s, lo_s)
@@ -108,7 +115,8 @@ def geometria_clasica(ig, al, be, cfg, n_cruces):
                          rtol=1e-8, atol=1e-10,
                          disk_in=(dk["r_in"] if dk else None),
                          disk_out=(dk["r_out"] if dk else None),
-                         max_crossings=n_cruces)
+                         max_crossings=n_cruces,
+                         r_escape=cfg["r_esc"])
     n = al.size
     cr = np.zeros((n, n_cruces)); cp = np.zeros((n, n_cruces))
     if dk:
@@ -128,8 +136,25 @@ def main():
     p.add_argument("--spin", type=float, default=0.9)
     p.add_argument("-W", "--width", type=int, default=480)
     p.add_argument("-H", "--height", type=int, default=270)
-    p.add_argument("--half-width", type=float, default=11.0)
+    p.add_argument("--fov-deg", type=float, default=1.259,
+                   help="campo de vision HORIZONTAL en grados. Es el encuadre: "
+                        "es independiente de --r-obs, asi que acercar la camara "
+                        "agranda el agujero en vez de hacer zoom al fondo. El "
+                        "valor por defecto es el que daba --half-width 11 desde "
+                        "r_obs = 1000 M")
+    p.add_argument("--half-width", type=float, default=None,
+                   help="COMPATIBILIDAD: semiancho del plano imagen en M, como "
+                        "antes. Se convierte al FOV equivalente para el --r-obs "
+                        "dado y sustituye a --fov-deg. Sirve para reproducir "
+                        "encuadres viejos; para trabajar, usa --fov-deg")
     p.add_argument("--r-obs", type=float, default=1000.0)
+    p.add_argument("--r-esc", type=float, default=None,
+                   help="radio al que se lee la direccion de escape. Por "
+                        "defecto max(1e4, 20 r_obs); ver kerr_camera.radio_escape")
+    p.add_argument("--grid", action="store_true",
+                   help="rejilla de coordenadas como fondo en vez del cielo. Es "
+                        "lo que hay que mirar para comprobar el lensing: un "
+                        "campo de estrellas no delata un mapeo espejado")
     p.add_argument("--inc", type=float, default=85.0)
     p.add_argument("--no-disk", action="store_true")
     p.add_argument("--r-out", type=float, default=20.0)
@@ -155,24 +180,35 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     k = KMetric(M=1.0, a=a.spin)
     theta_obs = np.deg2rad(a.inc)
+    fov = (kc.fov_desde_half_width(a.r_obs, a.half_width)
+           if a.half_width is not None else a.fov_deg)
+    r_esc = a.r_esc if a.r_esc is not None else kc.radio_escape(a.r_obs)
     cfg = {"r_obs": a.r_obs, "theta_obs": theta_obs, "spin": a.spin,
-           "sky_brightness": a.sky_brightness}
+           "sky_brightness": a.sky_brightness, "grid": a.grid,
+           "r_esc": r_esc}
     if not a.no_disk:
         cfg["disk"] = {"r_in": float(k.r_isco(prograde=not a.retrograde)),
                        "r_out": a.r_out, "n_images": a.n_images,
                        "turbulence": a.turbulence, "temp_K": a.temp_K,
                        "norm_r": a.norm_r, "prograde": not a.retrograde}
 
-    sky_tex = load_sky_image(a.sky_image) if a.sky_image.exists() else None
-    al, be = malla_imagen(a.width, a.height, a.half_width)
+    sky_tex = None if a.grid else (load_sky_image(a.sky_image)
+                                   if a.sky_image.exists() else None)
+    al, be = kc.malla_celeste(k, a.r_obs, theta_obs, fov, a.width, a.height)
     print(f"dispositivo {device}   {al.size:,} pixeles   a={a.spin}  inc={a.inc}")
+    print(f"camara: FOV {fov:.4f} deg   r_obs {a.r_obs:.0f} M   "
+          f"r_esc {r_esc:.0f} M   |alpha| max {np.abs(al).max():.2f} M")
+    if a.spin == 0.0:
+        print(f"  radio angular exacto de la sombra: "
+              f"{np.rad2deg(kc.radio_angular_sombra_schwarzschild(a.r_obs)):.4f} deg "
+              f"= {np.tan(kc.radio_angular_sombra_schwarzschild(a.r_obs))/kc.rad_por_pixel(fov, a.width):.1f} px")
 
     net_r = KerrRNet.cargar(a.modelos / "kerr_mino_r.pt", device).to(device)
     net_th = KerrThetaNet.cargar(a.modelos / "kerr_mino_theta.pt", device).to(device)
 
     t0 = time.perf_counter()
     pre = eng.precalcular(a.spin, theta_obs, a.r_obs, al, be,
-                          n_cruces=a.n_images)
+                          n_cruces=a.n_images, r_esc=r_esc)
     t_pre = time.perf_counter() - t0
     t0 = time.perf_counter()
     geo = eng.evaluar(pre, net_r, net_th, device, mu_exacto=a.mu_exacto)
@@ -183,6 +219,16 @@ def main():
     if geo["respaldo"].any():
         print(f"  {geo['respaldo'].sum():,} pixeles al trazador clasico "
               f"(eta<=0 o eje): {100*geo['respaldo'].mean():.3f}%")
+    # Los cruces que salen no finitos los descarta despues la mascara del disco
+    # sin decir nada (nan compara False), asi que se cuentan aqui: un fallo
+    # silencioso es peor que uno ruidoso. Vienen de refinar_r en rayos pegados
+    # a la curva critica; es previo a la camara angular y sale igual con el
+    # encuadre viejo (medido: 25 con la camara vieja, 28 con la nueva, sobre
+    # ~41k cruces). Sigue sin resolver.
+    n_nan = int((~np.isfinite(geo["cross_r"])).sum())
+    if n_nan:
+        print(f"  {n_nan:,} cruces no finitos descartados "
+              f"({100*n_nan/max(geo['cross_r'].size, 1):.4f}% de la tabla)")
 
     img = sombrear(geo, cfg, k, sky_tex).reshape(a.height, a.width, 3)
     salida = a.out or (ROOT / "results" / "figures" /
@@ -213,8 +259,7 @@ def main():
         cos = np.clip((geo["direccion"][sel] * geo_c["direccion"][sel]).sum(1),
                       -1, 1)
         ang = np.arccos(cos)
-        px_rad = 2.0 * np.arctan(a.half_width / a.r_obs) / a.width
-        px = ang / px_rad
+        px = ang / kc.rad_por_pixel(fov, a.width)
         print(f"direccion de escape: media {px.mean():.3f} px, "
               f"mediana {np.median(px):.3f} px, p95 {np.percentile(px,95):.3f} px, "
               f"peor {px.max():.2f} px")
